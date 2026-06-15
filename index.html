@@ -244,14 +244,15 @@
     <div class="toolbar">
       <input type="text" id="search" placeholder="Search email, phone or name…" />
       <select id="filter">
-        <option value="all">All in main list</option>
+        <option value="everything">Everything (all 3 statuses)</option>
+        <option value="all">In main list (attended + not)</option>
         <option value="attended">Attended only</option>
         <option value="missing">Not attended only</option>
         <option value="extra">Attendees not in main</option>
       </select>
       <div class="spacer"></div>
-      <button class="ghost" id="dlXlsx" disabled>Download XLSX</button>
-      <button class="ghost" id="dlCsv" disabled>Download CSV</button>
+      <button class="ghost" id="dlXlsx" disabled title="Full report: Summary + All Participants + Attendees Not In Main">Download XLSX</button>
+      <button class="ghost" id="dlCsv" disabled title="Exports the current filter view (e.g. Attendees not in main)">Download CSV</button>
     </div>
 
     <div class="tablewrap">
@@ -495,6 +496,7 @@ function currentRows(){
   const f=$("filter").value, q=$("search").value.trim().toLowerCase();
   let rows;
   if(f==="extra") rows=EXTRA.map(r=>({...r,attended:null}));
+  else if(f==="everything") rows=RESULTS.concat(EXTRA.map(r=>({...r,attended:null,by:""})));
   else rows=RESULTS.filter(r=> f==="all" ? true : f==="attended" ? r.attended : !r.attended);
   if(q) rows=rows.filter(r=> (r.email||"").includes(q)||(r.phone||"").includes(q)||(r.name||"").toLowerCase().includes(q));
   return rows;
@@ -560,6 +562,16 @@ $("dlXlsx").onclick=()=>{
   ];
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(sum),"Summary");
 
+  // combined: all three statuses in one list
+  const allRows=mainSheetData().concat(EXTRA.map(r=>({
+    "Name":r.name,"Email":r.email,"Phone":r.phone,"Status":"Not in main list",
+    "Total Duration (min)":r.mins,"Sessions":r.sessions,"Matched By":""
+  })));
+  const wsCombined=XLSX.utils.json_to_sheet(allRows);
+  colAsText(wsCombined,"Phone");
+  wsCombined['!cols']=[{wch:22},{wch:30},{wch:14},{wch:16},{wch:20},{wch:9},{wch:14}];
+  XLSX.utils.book_append_sheet(wb,wsCombined,"All Results");
+
   const wsAll=XLSX.utils.json_to_sheet(mainSheetData());
   colAsText(wsAll,"Phone");
   wsAll['!cols']=[{wch:22},{wch:30},{wch:14},{wch:13},{wch:20},{wch:9},{wch:14}];
@@ -575,10 +587,18 @@ $("dlXlsx").onclick=()=>{
   XLSX.writeFile(wb,"attendee_match_"+stamp()+".xlsx");
 };
 $("dlCsv").onclick=()=>{
-  const csv=Papa.unparse(mainSheetData());
-  const blob=new Blob([csv],{type:"text/csv"});
+  const rows=currentRows().map(r=>({
+    "Name":r.name,"Email":r.email,"Phone":r.phone,
+    "Status":r.attended===null?"Not in main list":(r.attended?"Attended":"Not Attended"),
+    "Total Duration (min)":r.mins||0,"Sessions":r.sessions||0,"Matched By":r.attended===null?"":(r.by||"")
+  }));
+  const label=$("filter").value==="extra"?"attendees_not_in_main"
+            :$("filter").value==="attended"?"attended"
+            :$("filter").value==="missing"?"not_attended":"all_participants";
+  const csv=Papa.unparse(rows);
+  const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"});
   const a=document.createElement("a");
-  a.href=URL.createObjectURL(blob); a.download="attendee_match_"+stamp()+".csv"; a.click();
+  a.href=URL.createObjectURL(blob); a.download="match_"+label+"_"+stamp()+".csv"; a.click();
   URL.revokeObjectURL(a.href);
 };
 function stamp(){ const d=new Date(); const p=n=>String(n).padStart(2,"0");
