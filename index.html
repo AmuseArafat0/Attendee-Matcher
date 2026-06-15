@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Attendee Matcher</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --ink:#15171C; --ink-soft:#3A3F4A; --muted:#7A8290;
+    --bg:#F4F5F7; --surface:#FFFFFF; --line:#E4E7EC; --line-soft:#EEF0F3;
+    --accent:#4338CA; --accent-weak:#EEECFB;
+    --attend:#15803D; --attend-bg:#E7F4EC;
+    --miss:#9AA2AE; --miss-bg:#F2F3F5;
+    --extra:#B45309; --extra-bg:#FBF1E3;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.45}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 24px 80px}
+
+  header.top{background:var(--ink);color:#fff;padding:26px 0 24px;margin-bottom:28px}
+  header.top .wrap{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+  header.top h1{margin:0;font-size:22px;font-weight:650;letter-spacing:-.4px}
+  header.top .tag{font-family:var(--mono);font-size:11px;color:#A6AEBD;letter-spacing:.5px;text-transform:uppercase}
+  header.top p{margin:8px 0 0;color:#B9C0CC;font-size:13px;flex-basis:100%}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media (max-width:760px){.grid2{grid-template-columns:1fr}}
+
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .card h2{margin:0 0 4px;font-size:14px;font-weight:600}
+  .card .sub{color:var(--muted);font-size:12.5px;margin-bottom:14px}
+
+  .drop{border:1.5px dashed var(--line);border-radius:10px;background:var(--line-soft);
+        padding:22px 16px;text-align:center;cursor:pointer;transition:.15s;position:relative}
+  .drop:hover{border-color:var(--accent);background:var(--accent-weak)}
+  .drop.over{border-color:var(--accent);background:var(--accent-weak)}
+  .drop .ico{font-family:var(--mono);font-size:20px;color:var(--accent);display:block;margin-bottom:6px}
+  .drop .big{font-weight:600;font-size:13.5px}
+  .drop .small{color:var(--muted);font-size:12px;margin-top:3px}
+  .drop input{display:none}
+
+  .files{margin-top:12px;max-height:150px;overflow:auto}
+  .files .f{display:flex;justify-content:space-between;align-items:center;gap:10px;
+            padding:6px 10px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;font-size:12.5px;background:#fff}
+  .files .f .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .files .f .sz{font-family:var(--mono);color:var(--muted);font-size:11px}
+  .files .f .x{cursor:pointer;color:var(--miss);font-weight:700;padding:0 4px}
+  .files .f .x:hover{color:#DC2626}
+
+  .actions{display:flex;gap:12px;align-items:center;margin:22px 0 6px;flex-wrap:wrap}
+  button{font-family:var(--sans);font-size:13.5px;font-weight:600;border-radius:9px;cursor:pointer;border:1px solid transparent;padding:11px 20px}
+  button.primary{background:var(--accent);color:#fff}
+  button.primary:hover{background:#372BA8}
+  button.primary:disabled{background:#C7C9D4;cursor:not-allowed}
+  button.ghost{background:#fff;border-color:var(--line);color:var(--ink)}
+  button.ghost:hover{border-color:var(--accent);color:var(--accent)}
+  button.ghost:disabled{opacity:.5;cursor:not-allowed}
+
+  .prog{margin-top:16px;display:none}
+  .prog.show{display:block}
+  .bar{height:8px;background:var(--line);border-radius:99px;overflow:hidden}
+  .bar > i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+  .prog .lbl{font-size:12px;color:var(--muted);margin-top:7px;font-family:var(--mono)}
+
+  /* results */
+  .results{margin-top:30px;display:none}
+  .results.show{display:block}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}
+  @media (max-width:760px){.stats{grid-template-columns:repeat(2,1fr)}}
+  .stat{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .stat .n{font-size:30px;font-weight:680;letter-spacing:-1px;font-family:var(--mono)}
+  .stat .k{font-size:12px;color:var(--muted);margin-top:2px}
+  .stat.attend{border-top:3px solid var(--attend)} .stat.attend .n{color:var(--attend)}
+  .stat.miss{border-top:3px solid var(--miss)} .stat.miss .n{color:var(--ink-soft)}
+  .stat.total{border-top:3px solid var(--accent)} .stat.total .n{color:var(--accent)}
+  .stat.extra{border-top:3px solid var(--extra)} .stat.extra .n{color:var(--extra)}
+
+  .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+  .toolbar input[type=text]{flex:1;min-width:200px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;font-size:13px;font-family:var(--sans)}
+  .toolbar select{padding:10px 12px;border:1px solid var(--line);border-radius:9px;font-size:13px;background:#fff}
+  .toolbar .spacer{flex:1}
+
+  .tablewrap{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{text-align:left;background:#FAFBFC;color:var(--muted);font-weight:600;font-size:11.5px;
+     text-transform:uppercase;letter-spacing:.4px;padding:11px 14px;border-bottom:1px solid var(--line);position:sticky;top:0}
+  td{padding:10px 14px;border-bottom:1px solid var(--line-soft)}
+  td.mono,th.mono{font-family:var(--mono)}
+  tr:last-child td{border-bottom:none}
+  .pill{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:99px}
+  .pill.a{background:var(--attend-bg);color:var(--attend)}
+  .pill.m{background:var(--miss-bg);color:var(--ink-soft)}
+  .pill.e{background:var(--extra-bg);color:var(--extra)}
+  .note{padding:13px 16px;color:var(--muted);font-size:12.5px;border-top:1px solid var(--line)}
+
+  .err{background:#FEF1F1;border:1px solid #F6C9C9;color:#B42318;border-radius:10px;padding:12px 14px;font-size:13px;margin-top:14px;display:none}
+  .err.show{display:block}
+  .hint{font-size:12px;color:var(--muted);margin-top:8px}
+  code{font-family:var(--mono);background:var(--line-soft);padding:1px 5px;border-radius:4px;font-size:12px}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <h1>Attendee Matcher</h1>
+    <span class="tag">zoom × main list</span>
+    <p>Match Zoom attendee reports against your main participant list by email and phone. Counts attended vs not-attended and sums each person's total join time across every re-join.</p>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="grid2">
+    <div class="card">
+      <h2>1 · Main participant list</h2>
+      <div class="sub">One or more CSVs. Combined into a single master list.</div>
+      <label class="drop" id="dropMain">
+        <span class="ico">[ + ]</span>
+        <span class="big">Drop main CSV(s) or click to choose</span>
+        <span class="small">Detects <code>email</code> &amp; phone (Column G) automatically</span>
+        <input type="file" id="fileMain" accept=".csv" multiple />
+      </label>
+      <div class="files" id="listMain"></div>
+    </div>
+
+    <div class="card">
+      <h2>2 · Attendee reports</h2>
+      <div class="sub">Up to 100 Zoom attendee CSVs. Drop them all at once.</div>
+      <label class="drop" id="dropAtt">
+        <span class="ico">[ ++ ]</span>
+        <span class="big">Drop attendee CSVs or click to choose</span>
+        <span class="small">Re-join sessions are merged &amp; durations summed per person</span>
+        <input type="file" id="fileAtt" accept=".csv" multiple />
+      </label>
+      <div class="files" id="listAtt"></div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="primary" id="run" disabled>Match participants</button>
+    <button class="ghost" id="clear">Clear all</button>
+    <span class="hint" id="readyHint">Add a main list and at least one attendee report.</span>
+  </div>
+
+  <div class="prog" id="prog">
+    <div class="bar"><i id="barFill"></i></div>
+    <div class="lbl" id="progLbl">Starting…</div>
+  </div>
+
+  <div class="err" id="err"></div>
+
+  <div class="results" id="results">
+    <div class="stats">
+      <div class="stat total"><div class="n" id="sTotal">0</div><div class="k">In main list</div></div>
+      <div class="stat attend"><div class="n" id="sAtt">0</div><div class="k">Attended (matched)</div></div>
+      <div class="stat miss"><div class="n" id="sMiss">0</div><div class="k">Not attended</div></div>
+      <div class="stat extra"><div class="n" id="sExtra">0</div><div class="k">Attendees not in main</div></div>
+    </div>
+
+    <div class="toolbar">
+      <input type="text" id="search" placeholder="Search email, phone or name…" />
+      <select id="filter">
+        <option value="all">All in main list</option>
+        <option value="attended">Attended only</option>
+        <option value="missing">Not attended only</option>
+        <option value="extra">Attendees not in main</option>
+      </select>
+      <div class="spacer"></div>
+      <button class="ghost" id="dlXlsx" disabled>Download XLSX</button>
+      <button class="ghost" id="dlCsv" disabled>Download CSV</button>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>Name</th><th>Email</th><th class="mono">Phone</th>
+          <th>Status</th><th class="mono">Total duration (min)</th><th class="mono">Sessions</th><th>Matched by</th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div class="note" id="tableNote"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------- state ---------- */
+let mainFiles = [];          // File[]
+let attFiles = [];           // File[]
+let RESULTS = [];            // main-list rows: {name,email,phone,attended,mins,sessions,by}
+let EXTRA = [];              // attendees not in main: {name,email,phone,mins,sessions}
+let SUMMARY = null;
+
+const $ = id => document.getElementById(id);
+
+/* ---------- helpers ---------- */
+function normEmail(e){ return (e||"").trim().toLowerCase(); }
+function normPhone(p){
+  const d = (p||"").replace(/\D/g,"");      // strip spaces, dashes, +, etc.
+  return d.length >= 10 ? d.slice(-10) : d; // last 10 digits → Column-G format
+}
+function fmtSize(b){ return b<1024?b+" B":b<1048576?(b/1024).toFixed(0)+" KB":(b/1048576).toFixed(1)+" MB"; }
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+/* ---------- file UI ---------- */
+function renderLists(){
+  const lm = $("listMain"); lm.innerHTML = "";
+  mainFiles.forEach((f,i)=>{
+    const d=document.createElement("div"); d.className="f";
+    d.innerHTML=`<span class="nm">${esc(f.name)}</span><span class="sz">${fmtSize(f.size)}</span><span class="x" data-main="${i}">×</span>`;
+    lm.appendChild(d);
+  });
+  const la = $("listAtt"); la.innerHTML = "";
+  attFiles.forEach((f,i)=>{
+    const d=document.createElement("div"); d.className="f";
+    d.innerHTML=`<span class="nm">${esc(f.name)}</span><span class="sz">${fmtSize(f.size)}</span><span class="x" data-att="${i}">×</span>`;
+    la.appendChild(d);
+  });
+  lm.querySelectorAll("[data-main]").forEach(x=>x.onclick=e=>{e.preventDefault();mainFiles.splice(+x.dataset.main,1);sync();});
+  la.querySelectorAll("[data-att]").forEach(x=>x.onclick=e=>{e.preventDefault();attFiles.splice(+x.dataset.att,1);sync();});
+}
+function sync(){
+  renderLists();
+  const ready = mainFiles.length>0 && attFiles.length>0;
+  $("run").disabled = !ready;
+  $("readyHint").textContent = ready
+    ? `${mainFiles.length} main file${mainFiles.length>1?"s":""} + ${attFiles.length} attendee file${attFiles.length>1?"s":""} ready.`
+    : "Add a main list and at least one attendee report.";
+}
+function addMain(files){
+  for(const f of files){ if(/\.csv$/i.test(f.name)) mainFiles.push(f); }
+  sync();
+}
+function addAtt(files){
+  for(const f of files){ if(/\.csv$/i.test(f.name)) attFiles.push(f); }
+  sync();
+}
+function wireDrop(dropId, isMain){
+  const d=$(dropId), input=d.querySelector("input");
+  input.onchange=e=>{ const fs=[...e.target.files]; if(isMain) addMain(fs); else addAtt(fs); input.value=""; };
+  ["dragover","dragenter"].forEach(ev=>d.addEventListener(ev,e=>{e.preventDefault();d.classList.add("over");}));
+  ["dragleave","drop"].forEach(ev=>d.addEventListener(ev,e=>{e.preventDefault();d.classList.remove("over");}));
+  d.addEventListener("drop",e=>{ const fs=[...e.dataTransfer.files]; if(isMain) addMain(fs); else addAtt(fs); });
+}
+wireDrop("dropMain",true);
+wireDrop("dropAtt",false);
+$("clear").onclick=()=>{ mainFiles=[]; attFiles=[]; RESULTS=[]; EXTRA=[]; SUMMARY=null;
+  $("results").classList.remove("show"); $("err").classList.remove("show"); sync(); };
+
+/* ---------- parsing: attendee report (streaming) ---------- */
+/* Each report has Host / Panelist / Attendee sections. We only read the
+   "Attendee Details" block (its header contains "First Name"), capture the
+   Email / Phone / Time-in-session column positions, then aggregate. */
+function parseAttendee(file, agg, phoneToKey){
+  return new Promise((resolve,reject)=>{
+    let inSection=false, iEmail=-1, iPhone=-1, iTime=-1;
+    Papa.parse(file,{
+      skipEmptyLines:"greedy",
+      chunkSize:1024*1024,
+      worker:false,
+      step:(res)=>{
+        const row=res.data;
+        if(!row || !row.length) return;
+        const first=(row[0]||"").trim();
+        if(!inSection){
+          if(first==="Attended" && row.indexOf("First Name")!==-1){
+            inSection=true;
+            iEmail=row.indexOf("Email");
+            iPhone=row.indexOf("Phone");
+            iTime =row.findIndex(c=>/Time in Session/i.test(c||""));
+          }
+          return;
+        }
+        if(first!=="Yes" && first!=="No") return;   // skip stray rows
+        const email=normEmail(row[iEmail]);
+        const phone=normPhone(row[iPhone]);
+        let t=parseInt(row[iTime],10); if(isNaN(t)) t=0;
+        const name=(row[1]||"").trim();
+        const key = email || ("ph:"+phone);
+        if(!key || key==="ph:") return;
+        let a=agg.get(key);
+        if(!a){ a={email,phone,name,mins:0,sessions:0}; agg.set(key,a); }
+        a.mins+=t; a.sessions++;
+        if(phone && !a.phone){ a.phone=phone; }
+        if(name && !a.name){ a.name=name; }
+        if(phone && !phoneToKey.has(phone)) phoneToKey.set(phone,key);
+      },
+      complete:()=> resolve(inSection),
+      error:err=>reject(err)
+    });
+  });
+}
+
+/* ---------- parsing: main list ---------- */
+function parseMain(file){
+  return new Promise((resolve,reject)=>{
+    let header=null, iEmail=-1, iPhone=-1, iName=-1, rows=[];
+    Papa.parse(file,{
+      skipEmptyLines:"greedy",
+      worker:false,
+      step:(res)=>{
+        const row=res.data;
+        if(!header){
+          header=row;
+          iEmail=header.findIndex(c=>/^email$/i.test((c||"").trim()));
+          if(iEmail<0) iEmail=header.findIndex(c=>/email/i.test(c||""));
+          // prefer a column literally named "Phone" (Column G), else phoneNumber
+          iPhone=header.findIndex(c=>/^phone$/i.test((c||"").trim()));
+          if(iPhone<0) iPhone=header.findIndex(c=>/phonenumber/i.test((c||"").replace(/\s/g,"")));
+          if(iPhone<0) iPhone=header.findIndex(c=>/phone/i.test(c||""));
+          iName=header.findIndex(c=>/^name$/i.test((c||"").trim()));
+          if(iName<0) iName=header.findIndex(c=>/name/i.test(c||"")&&!/user/i.test(c||""));
+          return;
+        }
+        if(!row.length) return;
+        rows.push({
+          name:(iName>=0?row[iName]:"")||"",
+          email:normEmail(iEmail>=0?row[iEmail]:""),
+          phone:normPhone(iPhone>=0?row[iPhone]:"")
+        });
+      },
+      complete:()=>{
+        if(iEmail<0 && iPhone<0) return reject(new Error("Could not find an email or phone column in the main list."));
+        resolve(rows);
+      },
+      error:err=>reject(err)
+    });
+  });
+}
+
+/* ---------- run ---------- */
+$("run").onclick = async ()=>{
+  $("err").classList.remove("show");
+  $("run").disabled=true; $("clear").disabled=true;
+  $("prog").classList.add("show");
+  const setBar=(p,msg)=>{ $("barFill").style.width=(p*100).toFixed(1)+"%"; $("progLbl").textContent=msg; };
+
+  try{
+    const agg=new Map(), phoneToKey=new Map();
+    let bad=0;
+    for(let i=0;i<attFiles.length;i++){
+      setBar(i/(attFiles.length+1), `Reading attendee report ${i+1} of ${attFiles.length} — ${attFiles[i].name}`);
+      const ok=await parseAttendee(attFiles[i],agg,phoneToKey);
+      if(!ok) bad++;
+      await new Promise(r=>setTimeout(r,0)); // yield to UI
+    }
+    setBar(attFiles.length/(attFiles.length+1), "Reading main participant list…");
+    let main=[];
+    for(let i=0;i<mainFiles.length;i++){
+      $("progLbl").textContent=`Reading main list ${i+1} of ${mainFiles.length} — ${mainFiles[i].name}`;
+      const rows=await parseMain(mainFiles[i]);
+      main=main.concat(rows);
+      await new Promise(r=>setTimeout(r,0));
+    }
+
+    setBar(0.97,"Matching…");
+    RESULTS=[]; const matchedKeys=new Set();
+    let att=0, miss=0;
+    for(const m of main){
+      let a=null, by="";
+      if(m.email && agg.has(m.email)){ a=agg.get(m.email); by="email"; }
+      else if(m.phone && phoneToKey.has(m.phone)){ a=agg.get(phoneToKey.get(m.phone)); by="phone"; }
+      if(a){
+        matchedKeys.add(a.email?a.email:("ph:"+a.phone));
+        att++;
+        RESULTS.push({name:m.name||a.name,email:m.email,phone:m.phone||a.phone,attended:true,mins:a.mins,sessions:a.sessions,by});
+      }else{
+        miss++;
+        RESULTS.push({name:m.name,email:m.email,phone:m.phone,attended:false,mins:0,sessions:0,by:""});
+      }
+    }
+    EXTRA=[];
+    for(const [key,a] of agg){ if(!matchedKeys.has(key)) EXTRA.push({name:a.name,email:a.email,phone:a.phone,mins:a.mins,sessions:a.sessions}); }
+
+    SUMMARY={total:main.length,att,miss,extra:EXTRA.length,files:attFiles.length,mainFiles:mainFiles.length,bad};
+    setBar(1,"Done.");
+    renderResults();
+  }catch(e){
+    $("err").textContent="Error: "+e.message; $("err").classList.add("show");
+  }finally{
+    $("run").disabled=false; $("clear").disabled=false;
+    setTimeout(()=>$("prog").classList.remove("show"),700);
+  }
+};
+
+/* ---------- results render ---------- */
+function renderResults(){
+  $("sTotal").textContent=SUMMARY.total.toLocaleString();
+  $("sAtt").textContent=SUMMARY.att.toLocaleString();
+  $("sMiss").textContent=SUMMARY.miss.toLocaleString();
+  $("sExtra").textContent=SUMMARY.extra.toLocaleString();
+  $("dlXlsx").disabled=false; $("dlCsv").disabled=false;
+  $("results").classList.add("show");
+  drawTable();
+  $("results").scrollIntoView({behavior:"smooth",block:"start"});
+}
+function currentRows(){
+  const f=$("filter").value, q=$("search").value.trim().toLowerCase();
+  let rows;
+  if(f==="extra") rows=EXTRA.map(r=>({...r,attended:null}));
+  else rows=RESULTS.filter(r=> f==="all" ? true : f==="attended" ? r.attended : !r.attended);
+  if(q) rows=rows.filter(r=> (r.email||"").includes(q)||(r.phone||"").includes(q)||(r.name||"").toLowerCase().includes(q));
+  return rows;
+}
+function drawTable(){
+  const rows=currentRows(), CAP=400;
+  const tb=$("tbody"); tb.innerHTML="";
+  const slice=rows.slice(0,CAP);
+  const frag=document.createDocumentFragment();
+  for(const r of slice){
+    const tr=document.createElement("tr");
+    const pill = r.attended===null
+      ? `<span class="pill e">Not in main</span>`
+      : r.attended ? `<span class="pill a">Attended</span>` : `<span class="pill m">Not attended</span>`;
+    tr.innerHTML=`<td>${esc(r.name)}</td><td>${esc(r.email)}</td><td class="mono">${esc(r.phone)}</td>
+      <td>${pill}</td><td class="mono">${r.mins||0}</td><td class="mono">${r.sessions||0}</td>
+      <td class="mono" style="color:var(--muted)">${esc(r.by||"")}</td>`;
+    frag.appendChild(tr);
+  }
+  tb.appendChild(frag);
+  $("tableNote").textContent = rows.length>CAP
+    ? `Showing first ${CAP} of ${rows.length.toLocaleString()} rows. Use search to narrow, or download the full file.`
+    : `${rows.length.toLocaleString()} row${rows.length!==1?"s":""}.`;
+}
+$("search").oninput=drawTable;
+$("filter").onchange=drawTable;
+
+/* ---------- exports ---------- */
+function mainSheetData(){
+  return RESULTS.map(r=>({
+    "Name":r.name,"Email":r.email,"Phone":r.phone,
+    "Status":r.attended?"Attended":"Not Attended",
+    "Total Duration (min)":r.mins,"Sessions":r.sessions,"Matched By":r.by
+  }));
+}
+$("dlXlsx").onclick=()=>{
+  const wb=XLSX.utils.book_new();
+  const sum=[
+    ["Attendee Match Summary",""],
+    ["Generated",new Date().toLocaleString()],
+    ["Main files processed",SUMMARY.mainFiles],
+    ["Attendee files processed",SUMMARY.files],
+    ["",""],
+    ["In main list",SUMMARY.total],
+    ["Attended (matched)",SUMMARY.att],
+    ["Not attended",SUMMARY.miss],
+    ["Attendees not in main list",SUMMARY.extra],
+  ];
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(sum),"Summary");
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(mainSheetData()),"All Participants");
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(
+    EXTRA.map(r=>({"Name":r.name,"Email":r.email,"Phone":r.phone,"Total Duration (min)":r.mins,"Sessions":r.sessions}))
+  ),"Attendees Not In Main");
+  XLSX.writeFile(wb,"attendee_match_"+stamp()+".xlsx");
+};
+$("dlCsv").onclick=()=>{
+  const csv=Papa.unparse(mainSheetData());
+  const blob=new Blob([csv],{type:"text/csv"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob); a.download="attendee_match_"+stamp()+".csv"; a.click();
+  URL.revokeObjectURL(a.href);
+};
+function stamp(){ const d=new Date(); const p=n=>String(n).padStart(2,"0");
+  return d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+"_"+p(d.getHours())+p(d.getMinutes()); }
+
+sync();
+</script>
+</body>
+</html>
