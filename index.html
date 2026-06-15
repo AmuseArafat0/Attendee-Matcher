@@ -249,28 +249,25 @@
       <div class="stat total"><div class="n" id="sTotal">0</div><div class="k">In main list</div></div>
       <div class="stat attend"><div class="n" id="sAtt">0</div><div class="k">Attended (matched)</div></div>
       <div class="stat miss"><div class="n" id="sMiss">0</div><div class="k">Not attended</div></div>
-      <div class="stat extra"><div class="n" id="sExtra">0</div><div class="k">Attendees not in main</div></div>
     </div>
 
     <div class="toolbar">
       <input type="text" id="search" placeholder="Search email, phone or name…" />
       <select id="filter">
-        <option value="everything">Everything (all 3 statuses)</option>
         <option value="all">In main list (attended + not)</option>
         <option value="attended">Attended only</option>
         <option value="missing">Not attended only</option>
-        <option value="extra">Attendees not in main</option>
       </select>
       <div class="spacer"></div>
-      <button class="ghost" id="dlXlsx" disabled title="Full report: Summary + All Participants + Attendees Not In Main">Download XLSX</button>
-      <button class="ghost" id="dlCsv" disabled title="Exports the current filter view (e.g. Attendees not in main)">Download CSV</button>
+      <button class="ghost" id="dlXlsx" disabled title="Full report: Summary + All Participants">Download XLSX</button>
+      <button class="ghost" id="dlCsv" disabled title="Exports the current filter view">Download CSV</button>
     </div>
 
     <div class="tablewrap">
       <table>
         <thead><tr>
           <th>Name</th><th>Email</th><th class="mono">Phone</th>
-          <th>Status</th><th class="mono" title="Sum of every session's minutes (overlaps counted twice)">Total duration (min)</th><th class="mono" title="True wall-clock time present (overlapping sessions merged)">Present (min)</th><th class="mono">Sessions</th><th>Matched by</th>
+          <th>Status</th><th class="mono" title="Sum of every session's minutes (overlaps counted twice)">Total duration (min)</th><th class="mono" title="True wall-clock time present (overlapping sessions merged)">Present (min)</th><th>Matched by</th>
         </tr></thead>
         <tbody id="tbody"></tbody>
       </table>
@@ -563,7 +560,6 @@ function renderResults(){
   animateCount("sTotal",SUMMARY.total);
   animateCount("sAtt",SUMMARY.att);
   animateCount("sMiss",SUMMARY.miss);
-  animateCount("sExtra",SUMMARY.extra);
   $("dlXlsx").disabled=false; $("dlCsv").disabled=false;
   $("results").classList.add("show");
   drawTable();
@@ -571,10 +567,7 @@ function renderResults(){
 }
 function currentRows(){
   const f=$("filter").value, q=$("search").value.trim().toLowerCase();
-  let rows;
-  if(f==="extra") rows=EXTRA.map(r=>({...r,attended:null}));
-  else if(f==="everything") rows=RESULTS.concat(EXTRA.map(r=>({...r,attended:null,by:""})));
-  else rows=RESULTS.filter(r=> f==="all" ? true : f==="attended" ? r.attended : !r.attended);
+  let rows=RESULTS.filter(r=> f==="all" ? true : f==="attended" ? r.attended : !r.attended);
   if(q) rows=rows.filter(r=> (r.email||"").includes(q)||(r.phone||"").includes(q)||(r.name||"").toLowerCase().includes(q));
   return rows;
 }
@@ -585,11 +578,9 @@ function drawTable(){
   const frag=document.createDocumentFragment();
   for(const r of slice){
     const tr=document.createElement("tr");
-    const pill = r.attended===null
-      ? `<span class="pill e">Not in main</span>`
-      : r.attended ? `<span class="pill a">Attended</span>` : `<span class="pill m">Not attended</span>`;
+    const pill = r.attended ? `<span class="pill a">Attended</span>` : `<span class="pill m">Not attended</span>`;
     tr.innerHTML=`<td>${esc(r.name)}</td><td>${esc(r.email)}</td><td class="mono">${esc(r.phone)}</td>
-      <td>${pill}</td><td class="mono">${r.mins||0}</td><td class="mono">${r.present||0}</td><td class="mono">${r.sessions||0}</td>
+      <td>${pill}</td><td class="mono">${r.mins||0}</td><td class="mono">${r.present||0}</td>
       <td class="mono" style="color:var(--muted)">${esc(r.by||"")}</td>`;
     frag.appendChild(tr);
   }
@@ -606,7 +597,7 @@ function mainSheetData(){
   return RESULTS.map(r=>({
     "Name":r.name,"Email":r.email,"Phone":r.phone,
     "Status":r.attended?"Attended":"Not Attended",
-    "Total Duration (min)":r.mins,"Present (min)":r.present,"Sessions":r.sessions,"Matched By":r.by
+    "Total Duration (min)":r.mins,"Present (min)":r.present,"Matched By":r.by
   }));
 }
 /* force a named column to text so Excel never shows phones as 8.88E+09 */
@@ -635,23 +626,12 @@ $("dlXlsx").onclick=()=>{
     ["In main list",SUMMARY.total],
     ["Attended (matched)",SUMMARY.att],
     ["Not attended",SUMMARY.miss],
-    ["Attendees not in main list",SUMMARY.extra],
   ];
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(sum),"Summary");
 
-  // combined: all three statuses in one list
-  const allRows=mainSheetData().concat(EXTRA.map(r=>({
-    "Name":r.name,"Email":r.email,"Phone":r.phone,"Status":"Not in main list",
-    "Total Duration (min)":r.mins,"Present (min)":r.present,"Sessions":r.sessions,"Matched By":""
-  })));
-  const wsCombined=XLSX.utils.json_to_sheet(allRows);
-  colAsText(wsCombined,"Phone");
-  wsCombined['!cols']=[{wch:22},{wch:30},{wch:14},{wch:16},{wch:20},{wch:13},{wch:9},{wch:14}];
-  XLSX.utils.book_append_sheet(wb,wsCombined,"All Results");
-
   const wsAll=XLSX.utils.json_to_sheet(mainSheetData());
   colAsText(wsAll,"Phone");
-  wsAll['!cols']=[{wch:22},{wch:30},{wch:14},{wch:13},{wch:20},{wch:13},{wch:9},{wch:14}];
+  wsAll['!cols']=[{wch:22},{wch:30},{wch:14},{wch:13},{wch:20},{wch:13},{wch:14}];
   XLSX.utils.book_append_sheet(wb,wsAll,"All Participants");
 
   XLSX.writeFile(wb,"attendee_match_"+stamp()+".xlsx");
@@ -659,11 +639,10 @@ $("dlXlsx").onclick=()=>{
 $("dlCsv").onclick=()=>{
   const rows=currentRows().map(r=>({
     "Name":r.name,"Email":r.email,"Phone":r.phone,
-    "Status":r.attended===null?"Not in main list":(r.attended?"Attended":"Not Attended"),
-    "Total Duration (min)":r.mins||0,"Present (min)":r.present||0,"Sessions":r.sessions||0,"Matched By":r.attended===null?"":(r.by||"")
+    "Status":r.attended?"Attended":"Not Attended",
+    "Total Duration (min)":r.mins||0,"Present (min)":r.present||0,"Matched By":r.by||""
   }));
-  const label=$("filter").value==="extra"?"attendees_not_in_main"
-            :$("filter").value==="attended"?"attended"
+  const label=$("filter").value==="attended"?"attended"
             :$("filter").value==="missing"?"not_attended":"all_participants";
   const csv=Papa.unparse(rows);
   const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8"});
