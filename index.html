@@ -269,7 +269,7 @@
       <table>
         <thead><tr>
           <th>Name</th><th>Email</th><th class="mono">Phone</th>
-          <th>Status</th><th class="mono">Total duration (min)</th><th class="mono">Sessions</th><th>Matched by</th>
+          <th>Status</th><th class="mono" title="Sum of every session's minutes (overlaps counted twice)">Total duration (min)</th><th class="mono" title="True wall-clock time present (overlapping sessions merged)">Present (min)</th><th class="mono">Sessions</th><th>Matched by</th>
         </tr></thead>
         <tbody id="tbody"></tbody>
       </table>
@@ -346,9 +346,16 @@ $("clear").onclick=()=>{ mainFiles=[]; attFiles=[]; RESULTS=[]; EXTRA=[]; SUMMAR
 /* Each report has Host / Panelist / Attendee sections. We only read the
    "Attendee Details" block (its header contains "First Name"), capture the
    Email / Phone / Time-in-session column positions, then aggregate. */
+function parseTS(s){
+  // "06/14/2026 06:45:03 PM" -> minutes since epoch (UTC, for ordering/diffs only)
+  const m=/(\d{1,2})\/(\d{1,2})\/(\d{4})[ ,]+(\d{1,2}):(\d{2}):(\d{2})\s*(AM|PM)?/i.exec(s||"");
+  if(!m) return null;
+  let [,mo,d,y,h,mi,se,ap]=m; h=+h%12; if(ap&&ap.toUpperCase()==="PM") h+=12;
+  return Date.UTC(+y,+mo-1,+d,h,+mi,+se)/60000;
+}
 function parseAttendee(file, agg, phoneToKey){
   return new Promise((resolve,reject)=>{
-    let inSection=false, iEmail=-1, iPhone=-1, iTime=-1;
+    let inSection=false, iEmail=-1, iPhone=-1, iTime=-1, iJoin=-1, iLeave=-1;
     Papa.parse(file,{
       skipEmptyLines:"greedy",
       chunkSize:1024*1024,
@@ -363,6 +370,8 @@ function parseAttendee(file, agg, phoneToKey){
             iEmail=row.indexOf("Email");
             iPhone=row.indexOf("Phone");
             iTime =row.findIndex(c=>/Time in Session/i.test(c||""));
+            iJoin =row.indexOf("Join Time");
+            iLeave=row.indexOf("Leave Time");
           }
           return;
         }
@@ -374,8 +383,10 @@ function parseAttendee(file, agg, phoneToKey){
         const key = email || ("ph:"+phone);
         if(!key || key==="ph:") return;
         let a=agg.get(key);
-        if(!a){ a={email,phone,name,mins:0,sessions:0}; agg.set(key,a); }
+        if(!a){ a={email,phone,name,mins:0,sessions:0,iv:[]}; agg.set(key,a); }
         a.mins+=t; a.sessions++;
+        const s=parseTS(row[iJoin]), e=parseTS(row[iLeave]);
+        if(s!=null && e!=null && e>=s) a.iv.push([s,e]);
         if(phone && !a.phone){ a.phone=phone; }
         if(name && !a.name){ a.name=name; }
         if(phone && !phoneToKey.has(phone)) phoneToKey.set(phone,key);
@@ -384,6 +395,15 @@ function parseAttendee(file, agg, phoneToKey){
       error:err=>reject(err)
     });
   });
+}
+/* merge overlapping intervals -> true wall-clock minutes present */
+function mergeMins(iv){
+  if(!iv || !iv.length) return null;
+  iv.sort((a,b)=>a[0]-b[0]);
+  let total=0, cs=iv[0][0], ce=iv[0][1];
+  for(let i=1;i<iv.length;i++){ const s=iv[i][0],e=iv[i][1];
+    if(s<=ce){ if(e>ce) ce=e; } else { total+=ce-cs; cs=s; ce=e; } }
+  total+=ce-cs; return Math.round(total);
 }
 
 /* ---------- parsing: main list ---------- */
@@ -449,6 +469,9 @@ $("run").onclick = async ()=>{
     }
 
     setBar(0.97,"Matching…");
+    // compute true wall-clock present minutes per attendee, then free intervals
+    for(const a of agg.values()){ const mg=mergeMins(a.iv); a.present=(mg==null?a.mins:mg); a.iv=null; }
+
     RESULTS=[]; const matchedKeys=new Set();
     let att=0, miss=0;
     for(const m of main){
@@ -459,14 +482,14 @@ $("run").onclick = async ()=>{
         matchedKeys.add(a.email?a.email:("ph:"+a.phone));
         att++;
         const by = (eHit && pKey) ? "email + phone" : eHit ? "email" : "phone";
-        RESULTS.push({name:m.name||a.name,email:m.email,phone:m.phone||a.phone,attended:true,mins:a.mins,sessions:a.sessions,by});
+        RESULTS.push({name:m.name||a.name,email:m.email,phone:m.phone||a.phone,attended:true,mins:a.mins,present:a.present,sessions:a.sessions,by});
       }else{
         miss++;
-        RESULTS.push({name:m.name,email:m.email,phone:m.phone,attended:false,mins:0,sessions:0,by:"—"});
+        RESULTS.push({name:m.name,email:m.email,phone:m.phone,attended:false,mins:0,present:0,sessions:0,by:"—"});
       }
     }
     EXTRA=[];
-    for(const [key,a] of agg){ if(!matchedKeys.has(key)) EXTRA.push({name:a.name,email:a.email,phone:a.phone,mins:a.mins,sessions:a.sessions}); }
+    for(const [key,a] of agg){ if(!matchedKeys.has(key)) EXTRA.push({name:a.name,email:a.email,phone:a.phone,mins:a.mins,present:a.present,sessions:a.sessions}); }
 
     SUMMARY={total:main.length,att,miss,extra:EXTRA.length,files:attFiles.length,mainFiles:mainFiles.length,bad};
     setBar(1,"Done.");
@@ -522,7 +545,7 @@ function drawTable(){
       ? `<span class="pill e">Not in main</span>`
       : r.attended ? `<span class="pill a">Attended</span>` : `<span class="pill m">Not attended</span>`;
     tr.innerHTML=`<td>${esc(r.name)}</td><td>${esc(r.email)}</td><td class="mono">${esc(r.phone)}</td>
-      <td>${pill}</td><td class="mono">${r.mins||0}</td><td class="mono">${r.sessions||0}</td>
+      <td>${pill}</td><td class="mono">${r.mins||0}</td><td class="mono">${r.present||0}</td><td class="mono">${r.sessions||0}</td>
       <td class="mono" style="color:var(--muted)">${esc(r.by||"")}</td>`;
     frag.appendChild(tr);
   }
@@ -539,7 +562,7 @@ function mainSheetData(){
   return RESULTS.map(r=>({
     "Name":r.name,"Email":r.email,"Phone":r.phone,
     "Status":r.attended?"Attended":"Not Attended",
-    "Total Duration (min)":r.mins,"Sessions":r.sessions,"Matched By":r.by
+    "Total Duration (min)":r.mins,"Present (min)":r.present,"Sessions":r.sessions,"Matched By":r.by
   }));
 }
 /* force a named column to text so Excel never shows phones as 8.88E+09 */
@@ -575,16 +598,16 @@ $("dlXlsx").onclick=()=>{
   // combined: all three statuses in one list
   const allRows=mainSheetData().concat(EXTRA.map(r=>({
     "Name":r.name,"Email":r.email,"Phone":r.phone,"Status":"Not in main list",
-    "Total Duration (min)":r.mins,"Sessions":r.sessions,"Matched By":""
+    "Total Duration (min)":r.mins,"Present (min)":r.present,"Sessions":r.sessions,"Matched By":""
   })));
   const wsCombined=XLSX.utils.json_to_sheet(allRows);
   colAsText(wsCombined,"Phone");
-  wsCombined['!cols']=[{wch:22},{wch:30},{wch:14},{wch:16},{wch:20},{wch:9},{wch:14}];
+  wsCombined['!cols']=[{wch:22},{wch:30},{wch:14},{wch:16},{wch:20},{wch:13},{wch:9},{wch:14}];
   XLSX.utils.book_append_sheet(wb,wsCombined,"All Results");
 
   const wsAll=XLSX.utils.json_to_sheet(mainSheetData());
   colAsText(wsAll,"Phone");
-  wsAll['!cols']=[{wch:22},{wch:30},{wch:14},{wch:13},{wch:20},{wch:9},{wch:14}];
+  wsAll['!cols']=[{wch:22},{wch:30},{wch:14},{wch:13},{wch:20},{wch:13},{wch:9},{wch:14}];
   XLSX.utils.book_append_sheet(wb,wsAll,"All Participants");
 
   XLSX.writeFile(wb,"attendee_match_"+stamp()+".xlsx");
@@ -593,7 +616,7 @@ $("dlCsv").onclick=()=>{
   const rows=currentRows().map(r=>({
     "Name":r.name,"Email":r.email,"Phone":r.phone,
     "Status":r.attended===null?"Not in main list":(r.attended?"Attended":"Not Attended"),
-    "Total Duration (min)":r.mins||0,"Sessions":r.sessions||0,"Matched By":r.attended===null?"":(r.by||"")
+    "Total Duration (min)":r.mins||0,"Present (min)":r.present||0,"Sessions":r.sessions||0,"Matched By":r.attended===null?"":(r.by||"")
   }));
   const label=$("filter").value==="extra"?"attendees_not_in_main"
             :$("filter").value==="attended"?"attended"
