@@ -212,7 +212,7 @@
       <label class="drop" id="dropMain">
         <span class="ico">[ + ]</span>
         <span class="big">Drop main CSV(s) or click to choose</span>
-        <span class="small">Detects <code>email</code> &amp; phone (Column G) automatically</span>
+        <span class="small">Detects <code>email</code> &amp; phone column automatically (any position)</span>
         <input type="file" id="fileMain" accept=".csv" multiple />
       </label>
       <div class="files" id="listMain"></div>
@@ -408,9 +408,52 @@ function mergeMins(iv){
 }
 
 /* ---------- parsing: main list ---------- */
+/* Phone column is detected by CONTENT, not by position or header name.
+   It scans the data and picks whichever column actually holds mobile
+   numbers — works no matter where the phone sits (Column G, E, or anywhere)
+   or what it's called. Header names only nudge ties. Since normPhone()
+   reduces everything to the last 10 digits, choosing a "918884562739"
+   column or an "8884562739" column produces the same match key. */
+function looksLikeDate(v){
+  return /^\s*\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}/.test(v) || /\d{1,2}:\d{2}/.test(v);
+}
+function detectPhoneCol(header, sample, emailCol){
+  // headers that commonly hold phone-shaped junk we must NOT pick
+  const decoy=/^(cc|country\s*code|code|amount|amt|age|age\s*group|created|created\s*at|day|date|time|slug|id|order\s*id|pincode|zip)$/i;
+  let best=-1, bestScore=0;
+  for(let c=0;c<header.length;c++){
+    if(c===emailCol) continue;
+    const name=(header[c]||"").trim();
+    const flat=name.replace(/\s/g,"").toLowerCase();
+    let nonEmpty=0, indian=0, anyPhone=0;
+    for(const row of sample){
+      const v=(row[c]==null?"":String(row[c])).trim();
+      if(!v) continue;
+      nonEmpty++;
+      if(looksLikeDate(v)) continue;          // skip createdAt / time columns
+      const d=v.replace(/\D/g,"");
+      if(d.length>=10 && d.length<=13){
+        anyPhone++;
+        if(/^[6-9]/.test(d.slice(-10))) indian++;   // valid Indian mobile start
+      }
+    }
+    if(!nonEmpty) continue;
+    const indianRate=indian/nonEmpty, anyRate=anyPhone/nonEmpty, fill=nonEmpty/sample.length;
+    let boost=0;
+    if(flat==="phone") boost=0.30;
+    else if(flat==="phonenumber"||flat==="mobilenumber"||flat==="mobileno") boost=0.25;
+    else if(/mobile|whatsapp|contact|msisdn/.test(flat)) boost=0.20;
+    else if(flat.includes("phone")) boost=0.15;
+    if(decoy.test(name)) boost-=0.40;
+    const score=indianRate + anyRate*0.3 + fill*0.1 + boost;
+    // a column only qualifies if it genuinely looks like phone numbers
+    if((indianRate>=0.5 || anyRate>=0.6) && score>bestScore){ bestScore=score; best=c; }
+  }
+  return best;
+}
 function parseMain(file){
   return new Promise((resolve,reject)=>{
-    let header=null, iEmail=-1, iPhone=-1, iName=-1, rows=[];
+    let header=null, iEmail=-1, iName=-1, raw=[];
     Papa.parse(file,{
       skipEmptyLines:"greedy",
       worker:false,
@@ -420,23 +463,23 @@ function parseMain(file){
           header=row;
           iEmail=header.findIndex(c=>/^email$/i.test((c||"").trim()));
           if(iEmail<0) iEmail=header.findIndex(c=>/email/i.test(c||""));
-          // prefer a column literally named "Phone" (Column G), else phoneNumber
-          iPhone=header.findIndex(c=>/^phone$/i.test((c||"").trim()));
-          if(iPhone<0) iPhone=header.findIndex(c=>/phonenumber/i.test((c||"").replace(/\s/g,"")));
-          if(iPhone<0) iPhone=header.findIndex(c=>/phone/i.test(c||""));
           iName=header.findIndex(c=>/^name$/i.test((c||"").trim()));
           if(iName<0) iName=header.findIndex(c=>/name/i.test(c||"")&&!/user/i.test(c||""));
           return;
         }
         if(!row.length) return;
-        rows.push({
+        raw.push(row);
+      },
+      complete:()=>{
+        // detect the phone column from the actual data (sample the first rows)
+        const sample = raw.length>600 ? raw.slice(0,600) : raw;
+        const iPhone = detectPhoneCol(header, sample, iEmail);
+        if(iEmail<0 && iPhone<0) return reject(new Error("Could not find an email or phone column in the main list."));
+        const rows = raw.map(row=>({
           name:(iName>=0?row[iName]:"")||"",
           email:normEmail(iEmail>=0?row[iEmail]:""),
           phone:normPhone(iPhone>=0?row[iPhone]:"")
-        });
-      },
-      complete:()=>{
-        if(iEmail<0 && iPhone<0) return reject(new Error("Could not find an email or phone column in the main list."));
+        }));
         resolve(rows);
       },
       error:err=>reject(err)
